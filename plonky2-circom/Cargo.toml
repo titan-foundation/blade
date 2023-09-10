@@ -1,0 +1,35 @@
+[package]
+name = "plonky2_circom_verifier"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+plonky2 = { git = "https://github.com/polymerdao/plonky2", rev = "4cb0b48df1d227d5461a4c28ed025aaea64e2e62" }
+plonky2_util = { git = "https://github.com/polymerdao/plonky2", rev = "4cb0b48df1d227d5461a4c28ed025aaea64e2e62" }
+poseidon-permutation = { path = "../poseidon-permutation-rs"}
+anyhow = "1.0.65"
+log = "0.4.17"
+env_logger = "0.9.1"
+base64 = "0.13.0"
+serde = "1.0.145"
+serde_json = "1.0.86"
+keccak-hash = "0.10.0"
+sha2 = "0.10.6"
+itertools = "0.10.5"
+num = { version = "0.4", features = [ "rand" ] }
+
+[dev-dependencies]
+criterion = "0.4.0"
+
+[[bench]]
+name = "hashing"
+harness = false
+
+[profile.release]
+opt-level = 3
+
+[profile.bench]
+opt-level = 3
+
+[profile.test]
+opt-level = 3
