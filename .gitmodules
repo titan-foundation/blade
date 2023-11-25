@@ -1,0 +1,3 @@
+[submodule "libdevcore"]
+	path = libdevcore
+	url = https://github.com/oort-tech/libdevcore
