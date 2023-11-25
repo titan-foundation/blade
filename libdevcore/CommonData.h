@@ -1,38 +1,18 @@
-/*
-	This file is part of solidity.
+// Aleth: Ethereum C++ client, tools and libraries.
+// Copyright 2014-2019 Aleth Authors.
+// Licensed under the GNU General Public License, Version 3.
 
-	solidity is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation, either version 3 of the License, or
-	(at your option) any later version.
-
-	solidity is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
-*/
-/** @file CommonData.h
- * @author Gav Wood <i@gavwood.com>
- * @date 2014
- *
- * Shared algorithms and data types.
- */
-
+/// @file
+/// Shared algorithms and data types.
 #pragma once
 
-#include <libdevcore/Common.h>
-
-#include <boost/optional.hpp>
-
 #include <vector>
+#include <algorithm>
+#include <unordered_set>
 #include <type_traits>
 #include <cstring>
 #include <string>
-#include <set>
-#include <functional>
+#include "Common.h"
 
 namespace dev
 {
@@ -45,32 +25,52 @@ enum class WhenError
 	Throw = 1,
 };
 
-enum class HexPrefix
+template <class Iterator>
+std::string toHex(Iterator _it, Iterator _end, std::string const& _prefix)
 {
-	DontAdd = 0,
-	Add = 1,
-};
-/// Convert a series of bytes to the corresponding string of hex duplets.
-/// @param _w specifies the width of the first of the elements. Defaults to two - enough to represent a byte.
-/// @example toHex("A\x69") == "4169"
-template <class T>
-std::string toHex(T const& _data, int _w = 2, HexPrefix _prefix = HexPrefix::DontAdd)
-{
-	std::ostringstream ret;
-	unsigned ii = 0;
-	for (auto i: _data)
-		ret << std::hex << std::setfill('0') << std::setw(ii++ ? 2 : _w) << (int)(typename std::make_unsigned<decltype(i)>::type)i;
-	return (_prefix == HexPrefix::Add) ? "0x" + ret.str() : ret.str();
+	typedef std::iterator_traits<Iterator> traits;
+	static_assert(sizeof(typename traits::value_type) == 1, "toHex needs byte-sized element type");
+
+	static char const* hexdigits = "0123456789abcdef";
+	size_t off = _prefix.size();
+	std::string hex(std::distance(_it, _end)*2 + off, '0');
+	hex.replace(0, off, _prefix);
+	for (; _it != _end; _it++)
+	{
+		hex[off++] = hexdigits[(*_it >> 4) & 0x0f];
+		hex[off++] = hexdigits[*_it & 0x0f];
+	}
+	return hex;
 }
 
-/// Converts a (printable) ASCII hex character into the correspnding integer value.
-/// @example fromHex('A') == 10 && fromHex('f') == 15 && fromHex('5') == 5
-int fromHex(char _i, WhenError _throw);
+/// Convert a series of bytes to the corresponding hex string.
+/// @example toHex("A\x69") == "4169"
+template <class T> std::string toHex(T const& _data)
+{
+	return toHex(_data.begin(), _data.end(), "");
+}
+
+/// Convert a series of bytes to the corresponding hex string with 0x prefix.
+/// @example toHexPrefixed("A\x69") == "0x4169"
+template <class T> std::string toHexPrefixed(T const& _data)
+{
+	return toHex(_data.begin(), _data.end(), "0x");
+}
 
 /// Converts a (printable) ASCII hex string into the corresponding byte stream.
 /// @example fromHex("41626261") == asBytes("Abba")
 /// If _throw = ThrowType::DontThrow, it replaces bad hex characters with 0's, otherwise it will throw an exception.
 bytes fromHex(std::string const& _s, WhenError _throw = WhenError::DontThrow);
+
+/// @returns true if @a _s is a hex string.
+bool isHex(std::string const& _s) noexcept;
+
+/// @returns true if @a _hash is a hash conforming to FixedHash type @a T.
+template <class T> static bool isHash(std::string const& _hash)
+{
+	return (_hash.size() == T::size * 2 || (_hash.size() == T::size * 2 + 2 && _hash.substr(0, 2) == "0x")) && isHex(_hash);
+}
+
 /// Converts byte array to a string containing the same (binary) data. Unless
 /// the byte array happens to contain ASCII data, this won't be printable.
 inline std::string asString(bytes const& _b)
@@ -88,8 +88,13 @@ inline std::string asString(bytesConstRef _b)
 /// Converts a string to a byte array containing the string's (byte) data.
 inline bytes asBytes(std::string const& _b)
 {
-	return bytes((uint8_t const*)_b.data(), (uint8_t const*)(_b.data() + _b.size()));
+	return bytes((byte const*)_b.data(), (byte const*)(_b.data() + _b.size()));
 }
+
+/// Converts a string into the big-endian base-16 stream of integers (NOT ASCII).
+/// @example asNibbles("A")[0] == 4 && asNibbles("A")[1] == 1
+bytes asNibbles(bytesConstRef const& _s);
+
 
 // Big-endian to/from host endian conversion functions.
 
@@ -117,9 +122,13 @@ inline T fromBigEndian(_In const& _bytes)
 {
 	T ret = (T)0;
 	for (auto i: _bytes)
-		ret = (T)((ret << 8) | (uint8_t)(typename std::make_unsigned<typename _In::value_type>::type)i);
+		ret = (T)((ret << 8) | (byte)(typename std::make_unsigned<decltype(i)>::type)i);
 	return ret;
 }
+
+/// Convenience functions for toBigEndian
+inline std::string toBigEndianString(u256 _val) { std::string ret(32, '\0'); toBigEndian(_val, ret); return ret; }
+inline std::string toBigEndianString(u160 _val) { std::string ret(20, '\0'); toBigEndian(_val, ret); return ret; }
 inline bytes toBigEndian(u256 _val) { bytes ret(32); toBigEndian(_val, ret); return ret; }
 inline bytes toBigEndian(u160 _val) { bytes ret(20); toBigEndian(_val, ret); return ret; }
 
@@ -135,42 +144,32 @@ inline bytes toCompactBigEndian(T _val, unsigned _min = 0)
 	toBigEndian(_val, ret);
 	return ret;
 }
-inline bytes toCompactBigEndian(uint8_t _val, unsigned _min = 0)
+inline bytes toCompactBigEndian(byte _val, unsigned _min = 0)
 {
 	return (_min || _val) ? bytes{ _val } : bytes{};
 }
 
-/// Convenience function for conversion of a u256 to hex
-inline std::string toHex(u256 val, HexPrefix prefix = HexPrefix::DontAdd)
+/// Convenience function for toBigEndian.
+/// @returns a string just big enough to represent @a _val.
+template <class T>
+inline std::string toCompactBigEndianString(T _val, unsigned _min = 0)
 {
-	std::string str = toHex(toBigEndian(val));
-	return (prefix == HexPrefix::Add) ? "0x" + str : str;
+	static_assert(std::is_same<bigint, T>::value || !std::numeric_limits<T>::is_signed, "only unsigned types or bigint supported"); //bigint does not carry sign bit on shift
+	int i = 0;
+	for (T v = _val; v; ++i, v >>= 8) {}
+	std::string ret(std::max<unsigned>(_min, i), '\0');
+	toBigEndian(_val, ret);
+	return ret;
 }
 
-/// Returns decimal representation for small numbers and hex for large numbers.
-inline std::string formatNumber(bigint const& _value)
+inline std::string toCompactHex(u256 _val, unsigned _min = 0)
 {
-	if (_value < 0)
-		return "-" + formatNumber(-_value);
-	if (_value > 0x1000000)
-		return toHex(toCompactBigEndian(_value), 2, HexPrefix::Add);
-	else
-		return _value.str();
+	return toHex(toCompactBigEndian(_val, _min));
 }
 
-inline std::string formatNumber(u256 const& _value)
+inline std::string toCompactHexPrefixed(u256 _val, unsigned _min = 0)
 {
-	if (_value > 0x1000000)
-		return toHex(toCompactBigEndian(_value), 2, HexPrefix::Add);
-	else
-		return _value.str();
-}
-
-inline std::string toCompactHexWithPrefix(u256 val)
-{
-	std::ostringstream ret;
-	ret << std::hex << val;
-	return "0x" + ret.str();
+	return toHexPrefixed(toCompactBigEndian(_val, _min));
 }
 
 // Algorithms for string and string-like collections.
@@ -178,6 +177,20 @@ inline std::string toCompactHexWithPrefix(u256 val)
 /// Escapes a string into the C-string representation.
 /// @p _all if true will escape all characters, not just the unprintable ones.
 std::string escaped(std::string const& _s, bool _all = true);
+
+/// Determines the length of the common prefix of the two collections given.
+/// @returns the number of elements both @a _t and @a _u share, in order, at the beginning.
+/// @example commonPrefix("Hello world!", "Hello, world!") == 5
+template <class T, class _U>
+unsigned commonPrefix(T const& _t, _U const& _u)
+{
+	unsigned s = std::min<unsigned>(_t.size(), _u.size());
+	for (unsigned i = 0;; ++i)
+		if (i == s || _t[i] != _u[i])
+			return i;
+	return s;
+}
+
 /// Determine bytes required to encode the given integer value. @returns 0 if @a _i is zero.
 template <class T>
 inline unsigned bytesRequired(T _i)
@@ -187,42 +200,106 @@ inline unsigned bytesRequired(T _i)
 	for (; _i != 0; ++i, _i >>= 8) {}
 	return i;
 }
-/// Concatenate the contents of a container onto a vector
-template <class T, class U> std::vector<T>& operator+=(std::vector<T>& _a, U const& _b)
-{
-	for (auto const& i: _b)
-		_a.push_back(i);
-	return _a;
-}
-/// Concatenate the contents of a container onto a vector, move variant.
-template <class T, class U> std::vector<T>& operator+=(std::vector<T>& _a, U&& _b)
-{
-	std::move(_b.begin(), _b.end(), std::back_inserter(_a));
-	return _a;
-}
-/// Concatenate the contents of a container onto a set
-template <class T, class U> std::set<T>& operator+=(std::set<T>& _a, U const& _b)
-{
-	_a.insert(_b.begin(), _b.end());
-	return _a;
-}
-/// Concatenate two vectors of elements.
+
+/// Trims a given number of elements from the front of a collection.
+/// Only works for POD element types.
 template <class T>
-inline std::vector<T> operator+(std::vector<T> const& _a, std::vector<T> const& _b)
+void trimFront(T& _t, unsigned _elements)
 {
-	std::vector<T> ret(_a);
-	ret += _b;
+	static_assert(std::is_pod<typename T::value_type>::value, "");
+	memmove(_t.data(), _t.data() + _elements, (_t.size() - _elements) * sizeof(_t[0]));
+	_t.resize(_t.size() - _elements);
+}
+
+/// Pushes an element on to the front of a collection.
+/// Only works for POD element types.
+template <class T, class _U>
+void pushFront(T& _t, _U _e)
+{
+	static_assert(std::is_pod<typename T::value_type>::value, "");
+	_t.push_back(_e);
+	memmove(_t.data() + 1, _t.data(), (_t.size() - 1) * sizeof(_e));
+	_t[0] = _e;
+}
+
+/// Concatenate the contents of a container onto a vector.
+template <class T, class U>
+inline std::vector<T>& operator+=(std::vector<T>& _a, U const& _b)
+{
+    _a.insert(_a.end(), std::begin(_b), std::end(_b));
+    return _a;
+}
+
+/// Insert the contents of a container into a set
+template <class T, class U>
+std::set<T>& operator+=(std::set<T>& _a, U const& _b)
+{
+    _a.insert(std::begin(_b), std::end(_b));
+    return _a;
+}
+
+/// Insert the contents of a container into an unordered_set
+template <class T, class U>
+std::unordered_set<T>& operator+=(std::unordered_set<T>& _a, U const& _b)
+{
+    _a.insert(std::begin(_b), std::end(_b));
+    return _a;
+}
+
+/// Insert the contents of a container into a set
+template <class T, class U> std::set<T> operator+(std::set<T> _a, U const& _b)
+{
+	return _a += _b;
+}
+
+/// Insert the contents of a container into an unordered_set
+template <class T, class U> std::unordered_set<T> operator+(std::unordered_set<T> _a, U const& _b)
+{
+	return _a += _b;
+}
+
+/// Concatenate the contents of a container onto a vector
+template <class T, class U> std::vector<T> operator+(std::vector<T> _a, U const& _b)
+{
+	return _a += _b;
+}
+
+
+template<class T, class U>
+std::vector<T> keysOf(std::map<T, U> const& _m)
+{
+	std::vector<T> ret;
+	for (auto const& i: _m)
+		ret.push_back(i.first);
 	return ret;
 }
-/// Concatenate two vectors of elements, moving them.
-template <class T>
-inline std::vector<T> operator+(std::vector<T>&& _a, std::vector<T>&& _b)
+
+template<class T, class U>
+std::vector<T> keysOf(std::unordered_map<T, U> const& _m)
 {
-	std::vector<T> ret(std::move(_a));
-	if (&_a == &_b)
-		ret += ret;
-	else
-		ret += std::move(_b);
+	std::vector<T> ret;
+	for (auto const& i: _m)
+		ret.push_back(i.first);
+	return ret;
+}
+
+template<class T, class U>
+std::vector<U> valuesOf(std::map<T, U> const& _m)
+{
+	std::vector<U> ret;
+	ret.reserve(_m.size());
+	for (auto const& i: _m)
+		ret.push_back(i.second);
+	return ret;
+}
+
+template<class T, class U>
+std::vector<U> valuesOf(std::unordered_map<T, U> const& _m)
+{
+	std::vector<U> ret;
+	ret.reserve(_m.size());
+	for (auto const& i: _m)
+		ret.push_back(i.second);
 	return ret;
 }
 
@@ -232,47 +309,27 @@ bool contains(T const& _t, V const& _v)
 	return std::end(_t) != std::find(std::begin(_t), std::end(_t), _v);
 }
 
-
-/// Function that iterates over a vector, calling a function on each of its
-/// elements. If that function returns a vector, the element is replaced by
-/// the returned vector. During the iteration, the original vector is only valid
-/// on the current element and after that. The actual replacement takes
-/// place at the end, but already visited elements might be invalidated.
-/// If nothing is replaced, no copy is performed.
-template <typename T, typename F>
-void iterateReplacing(std::vector<T>& _vector, const F& _f)
+template <class V>
+bool contains(std::unordered_set<V> const& _set, V const& _v)
 {
-	// Concept: _f must be Callable, must accept param T&, must return optional<vector<T>>
-	bool useModified = false;
-	std::vector<T> modifiedVector;
-	for (size_t i = 0; i < _vector.size(); ++i)
-	{
-		if (boost::optional<std::vector<T>> r = _f(_vector[i]))
-		{
-			if (!useModified)
-			{
-				std::move(_vector.begin(), _vector.begin() + i, back_inserter(modifiedVector));
-				useModified = true;
-			}
-			modifiedVector += std::move(*r);
-		}
-		else if (useModified)
-			modifiedVector.emplace_back(std::move(_vector[i]));
-	}
-	if (useModified)
-		_vector = std::move(modifiedVector);
+    return _set.find(_v) != _set.end();
 }
 
-/// @returns true iff @a _str passess the hex address checksum test.
-/// @param _strict if false, hex strings with only uppercase or only lowercase letters
-/// are considered valid.
-bool passesAddressChecksum(std::string const& _str, bool _strict);
+template <class K, class V>
+bool contains(std::unordered_map<K, V> const& _map, K const& _k)
+{
+    return _map.find(_k) != _map.end();
+}
 
-/// @returns the checksummed version of an address
-/// @param hex strings that look like an address
-std::string getChecksummedAddress(std::string const& _addr);
+template <class V>
+bool contains(std::set<V> const& _set, V const& _v)
+{
+    return _set.find(_v) != _set.end();
+}
 
-bool isValidHex(std::string const& _string);
-bool isValidDecimal(std::string const& _string);
-
+template <class K, class V>
+bool contains(std::map<K, V> const& _map, K const& _k)
+{
+    return _map.find(_k) != _map.end();
+}
 }

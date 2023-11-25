@@ -1,169 +1,190 @@
-/*
-	This file is part of solidity.
-
-	solidity is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation, either version 3 of the License, or
-	(at your option) any later version.
-
-	solidity is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
-*/
-/** @file CommonIO.cpp
- * @author Gav Wood <i@gavwood.com>
- * @date 2014
- */
+// Aleth: Ethereum C++ client, tools and libraries.
+// Copyright 2014-2019 Aleth Authors.
+// Licensed under the GNU General Public License, Version 3.
 
 #include "CommonIO.h"
+#include <libdevcore/FileSystem.h>
 #include <iostream>
 #include <cstdlib>
 #include <fstream>
+#include <stdio.h>
 #if defined(_WIN32)
 #include <windows.h>
 #else
-#include <unistd.h>
 #include <termios.h>
 #endif
+#include "Exceptions.h"
 #include <boost/filesystem.hpp>
-#include "Assertions.h"
-
 using namespace std;
 using namespace dev;
 
+namespace fs = boost::filesystem;
+
+namespace dev
+{
 namespace
 {
+void createDirectoryIfNotExistent(boost::filesystem::path const& _path)
+{
+    if (!fs::exists(_path))
+    {
+        fs::create_directories(_path);
+        DEV_IGNORE_EXCEPTIONS(fs::permissions(_path, fs::owner_all));
+    }
+}
+
+}  // namespace
+
+string memDump(bytes const& _bytes, unsigned _width, bool _html)
+{
+    stringstream ret;
+    if (_html)
+        ret << "<pre style=\"font-family: Monospace,Lucida Console,Courier,Courier New,sans-serif; font-size: small\">";
+    for (unsigned i = 0; i < _bytes.size(); i += _width)
+    {
+        ret << hex << setw(4) << setfill('0') << i << " ";
+        for (unsigned j = i; j < i + _width; ++j)
+            if (j < _bytes.size())
+                if (_bytes[j] >= 32 && _bytes[j] < 127)
+                    if ((char)_bytes[j] == '<' && _html)
+                        ret << "&lt;";
+                    else if ((char)_bytes[j] == '&' && _html)
+                        ret << "&amp;";
+                    else
+                        ret << (char)_bytes[j];
+                else
+                    ret << '?';
+            else
+                ret << ' ';
+        ret << " ";
+        for (unsigned j = i; j < i + _width && j < _bytes.size(); ++j)
+            ret << setfill('0') << setw(2) << hex << (unsigned)_bytes[j] << " ";
+        ret << "\n";
+    }
+    if (_html)
+        ret << "</pre>";
+    return ret.str();
+}
 
 template <typename _T>
-inline _T readFile(std::string const& _file)
+inline _T contentsGeneric(boost::filesystem::path const& _file)
 {
-	_T ret;
-	size_t const c_elementSize = sizeof(typename _T::value_type);
-	std::ifstream is(_file, std::ifstream::binary);
-	if (!is)
-		return ret;
+    _T ret;
+    size_t const c_elementSize = sizeof(typename _T::value_type);
+    std::ifstream is(_file.string(), std::ifstream::binary);
+    if (!is)
+        return ret;
 
-	// get length of file:
-	is.seekg(0, is.end);
-	streamoff length = is.tellg();
-	if (length == 0)
-		return ret; // do not read empty file (MSVC does not like it)
-	is.seekg(0, is.beg);
+    // get length of file:
+    is.seekg(0, is.end);
+    streamoff length = is.tellg();
+    if (length == 0)
+        return ret; // do not read empty file (MSVC does not like it)
+    is.seekg(0, is.beg);
 
-	ret.resize((length + c_elementSize - 1) / c_elementSize);
-	is.read(const_cast<char*>(reinterpret_cast<char const*>(ret.data())), length);
-	return ret;
+    ret.resize((length + c_elementSize - 1) / c_elementSize);
+    is.read(const_cast<char*>(reinterpret_cast<char const*>(ret.data())), length);
+    return ret;
 }
 
-}
-
-string dev::readFileAsString(string const& _file)
+bytes contents(boost::filesystem::path const& _file)
 {
-	return readFile<string>(_file);
+    return contentsGeneric<bytes>(_file);
 }
 
-string dev::readStandardInput()
+bytesSec contentsSec(boost::filesystem::path const& _file)
 {
-	string ret;
-	while (!cin.eof())
-	{
-		string tmp;
-		// NOTE: this will read until EOF or NL
-		getline(cin, tmp);
-		ret.append(tmp);
-		ret.append("\n");
-	}
-	return ret;
+    bytes b = contentsGeneric<bytes>(_file);
+    bytesSec ret(b);
+    bytesRef(&b).cleanse();
+    return ret;
 }
 
+string contentsString(boost::filesystem::path const& _file)
+{
+    return contentsGeneric<string>(_file);
+}
+
+void writeFile(boost::filesystem::path const& _file, bytesConstRef _data, bool _writeDeleteRename)
+{
+    if (_writeDeleteRename)
+    {
+        fs::path tempPath = appendToFilename(_file, "-%%%%%%"); // XXX should not convert to string for this
+        writeFile(tempPath, _data, false);
+        // will delete _file if it exists
+        fs::rename(tempPath, _file);
+    }
+    else
+    {
+        createDirectoryIfNotExistent(_file.parent_path());
+
+        std::ofstream s(_file.string(), ios::trunc | ios::binary);
+        s.write(reinterpret_cast<char const*>(_data.data()), _data.size());
+        if (!s)
+            BOOST_THROW_EXCEPTION(FileError() << errinfo_comment("Could not write to file: " + _file.string()));
+        DEV_IGNORE_EXCEPTIONS(fs::permissions(_file, fs::owner_read | fs::owner_write));
+    }
+}
+
+void copyDirectory(boost::filesystem::path const& _srcDir, boost::filesystem::path const& _dstDir)
+{
+    createDirectoryIfNotExistent(_dstDir);
+
+    for (fs::directory_iterator file(_srcDir); file != fs::directory_iterator(); ++file)
+        fs::copy_file(file->path(), _dstDir / file->path().filename());
+}
+
+std::string getPassword(std::string const& _prompt)
+{
 #if defined(_WIN32)
-class DisableConsoleBuffering
-{
-public:
-	DisableConsoleBuffering()
-	{
-		m_stdin = GetStdHandle(STD_INPUT_HANDLE);
-		GetConsoleMode(m_stdin, &m_oldMode);
-		SetConsoleMode(m_stdin, m_oldMode & (~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT)));
-	}
-	~DisableConsoleBuffering()
-	{
-		SetConsoleMode(m_stdin, m_oldMode);
-	}
-private:
-	HANDLE m_stdin;
-	DWORD m_oldMode;
-};
+    cout << _prompt << flush;
+    // Get current Console input flags
+    HANDLE hStdin;
+    DWORD fdwSaveOldMode;
+    if ((hStdin = GetStdHandle(STD_INPUT_HANDLE)) == INVALID_HANDLE_VALUE)
+        BOOST_THROW_EXCEPTION(
+            ExternalFunctionFailure() << errinfo_externalFunction("GetStdHandle"));
+    if (!GetConsoleMode(hStdin, &fdwSaveOldMode))
+        BOOST_THROW_EXCEPTION(
+            ExternalFunctionFailure() << errinfo_externalFunction("GetConsoleMode"));
+    // Set console flags to no echo
+    if (!SetConsoleMode(hStdin, fdwSaveOldMode & (~ENABLE_ECHO_INPUT)))
+        BOOST_THROW_EXCEPTION(
+            ExternalFunctionFailure() << errinfo_externalFunction("SetConsoleMode"));
+    // Read the string
+    std::string ret;
+    std::getline(cin, ret);
+    // Restore old input mode
+    if (!SetConsoleMode(hStdin, fdwSaveOldMode))
+        BOOST_THROW_EXCEPTION(
+            ExternalFunctionFailure() << errinfo_externalFunction("SetConsoleMode"));
+    return ret;
 #else
-class DisableConsoleBuffering
-{
-public:
-	DisableConsoleBuffering()
-	{
-		tcgetattr(0, &m_termios);
-		m_termios.c_lflag &= ~ICANON;
-		m_termios.c_lflag &= ~ECHO;
-		m_termios.c_cc[VMIN] = 1;
-		m_termios.c_cc[VTIME] = 0;
-		tcsetattr(0, TCSANOW, &m_termios);
-	}
-	~DisableConsoleBuffering()
-	{
-		m_termios.c_lflag |= ICANON;
-		m_termios.c_lflag |= ECHO;
-		tcsetattr(0, TCSADRAIN, &m_termios);
-	}
-private:
-	struct termios m_termios;
-};
+    struct termios oflags;
+    struct termios nflags;
+    char password[256];
+
+    // disable echo in the terminal
+    tcgetattr(fileno(stdin), &oflags);
+    nflags = oflags;
+    nflags.c_lflag &= ~ECHO;
+    nflags.c_lflag |= ECHONL;
+
+    if (tcsetattr(fileno(stdin), TCSANOW, &nflags) != 0)
+        BOOST_THROW_EXCEPTION(ExternalFunctionFailure() << errinfo_externalFunction("tcsetattr"));
+
+    printf("%s", _prompt.c_str());
+    if (!fgets(password, sizeof(password), stdin))
+        BOOST_THROW_EXCEPTION(ExternalFunctionFailure() << errinfo_externalFunction("fgets"));
+    password[strlen(password) - 1] = 0;
+
+    // restore terminal
+    if (tcsetattr(fileno(stdin), TCSANOW, &oflags) != 0)
+        BOOST_THROW_EXCEPTION(ExternalFunctionFailure() << errinfo_externalFunction("tcsetattr"));
+
+
+    return password;
 #endif
-
-int dev::readStandardInputChar()
-{
-	DisableConsoleBuffering disableConsoleBuffering;
-	return cin.get();
 }
 
-boost::filesystem::path dev::weaklyCanonicalFilesystemPath(boost::filesystem::path const &_path)
-{
-	if (boost::filesystem::exists(_path))
-		return boost::filesystem::canonical(_path);
-	else
-	{
-		boost::filesystem::path head(_path);
-		boost::filesystem::path tail;
-		for (auto it = --_path.end(); !head.empty(); --it)
-		{
-			if (boost::filesystem::exists(head))
-				break;
-			tail = (*it) / tail;
-			head.remove_filename();
-		}
-		head = boost::filesystem::canonical(head);
-		return head / tail;
-	}
-}
-
-string dev::absolutePath(string const& _path, string const& _reference)
-{
-	boost::filesystem::path p(_path);
-	// Anything that does not start with `.` is an absolute path.
-	if (p.begin() == p.end() || (*p.begin() != "." && *p.begin() != ".."))
-		return _path;
-	boost::filesystem::path result(_reference);
-	result.remove_filename();
-	for (boost::filesystem::path::iterator it = p.begin(); it != p.end(); ++it)
-		if (*it == "..")
-			result = result.parent_path();
-		else if (*it != ".")
-			result /= *it;
-	return result.generic_string();
-}
-
-string dev::sanitizePath(string const& _path) {
-	return boost::filesystem::path(_path).generic_string();
-}
+}  // namespace dev
