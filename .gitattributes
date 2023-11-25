@@ -1,1 +1,2 @@
 *.blade linguist-language=Blade
+./test/*.cpp linguist-detectable=False
